@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: muralidhar-jira-mcp
+  labels:
+    app: muralidhar-jira-mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: muralidhar-jira-mcp
+  template:
+    metadata:
+      labels:
+        app: muralidhar-jira-mcp
+    spec:
+      containers:
+      - name: jira-mcp
+        image: abhishek15c/jira-mcp-server:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+          name: sse-port
+        env:
+        - name: JIRA_BASE_URL
+          value: "http://jira.lge.com/issue"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: muralidhar-jira-mcp-service
+spec:
+  type: NodePort
+  selector:
+    app: muralidhar-jira-mcp
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 8000
+      nodePort: 31983

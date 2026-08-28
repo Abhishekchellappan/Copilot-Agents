@@ -1,0 +1,92 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: muralidhar-hld-mcp
+  namespace: ai-user2
+  labels:
+    app: muralidhar-hld-mcp
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: muralidhar-hld-mcp
+  template:
+    metadata:
+      labels:
+        app: muralidhar-hld-mcp
+    spec:
+      containers:
+      - name: hld-mcp
+        image: abhishek15c/hld-mcp-server:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+          name: sse-port
+        env:
+        - name: COLLAB_BASE_URL
+          value: "http://collab.lge.com/main/rest/api/content"
+        - name: COLLAB_HLD_SPACE_KEY
+          value: "TVARCHDOCS"
+        - name: COLLAB_API_SPACE_KEY
+          value: "WEBOSDOCS"
+        - name: COLLAB_DEFAULT_SPACE_KEY
+          value: "TVARCHDOCS"
+        - name: COLLAB_HLD_PARENT_PAGE_ID
+          value: "598215130"
+        - name: COLLAB_API_PARENT_PAGE_ID
+          value: "1473985612"
+        - name: COLLAB_PAT
+          value: "" # Optional: Shared team Collab PAT (or pass per-user via mcp.json headers)
+        - name: AUTO_SYNC_ENABLED
+          value: "true"
+        - name: AUTO_SYNC_DAY_OF_WEEK
+          value: "mon"
+        - name: AUTO_SYNC_HOUR
+          value: "2"
+        - name: AUTO_SYNC_MINUTE
+          value: "0"
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+        volumeMounts:
+        - name: vector-store
+          mountPath: /app/vector_store
+      volumes:
+      - name: vector-store
+        persistentVolumeClaim:
+          claimName: hld-vector-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: muralidhar-hld-mcp-service
+  namespace: ai-user2
+  labels:
+    app: muralidhar-hld-mcp
+spec:
+  type: NodePort
+  selector:
+    app: muralidhar-hld-mcp
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 8000
+      nodePort: 31986
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hld-vector-pvc
+  namespace: ai-user2
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi

@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: muralidhar-build-mcp
+  namespace: ai-user2
+  labels:
+    app: muralidhar-build-mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: muralidhar-build-mcp
+  template:
+    metadata:
+      labels:
+        app: muralidhar-build-mcp
+    spec:
+      containers:
+      - name: build-mcp
+        image: abhishek15c/build-mcp-server:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: muralidhar-build-mcp-service
+  namespace: ai-user2
+  labels:
+    app: muralidhar-build-mcp
+spec:
+  type: NodePort
+  selector:
+    app: muralidhar-build-mcp
+  ports:
+    - port: 8000
+      targetPort: 8000
+      nodePort: 31984
+      protocol: TCP

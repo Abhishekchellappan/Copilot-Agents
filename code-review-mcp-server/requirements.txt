@@ -1,0 +1,7 @@
+mcp[cli]>=1.0.0
+fastmcp>=0.1.0
+pydantic-settings
+requests>=2.31.0
+uvicorn>=0.29.0
+starlette>=0.37.0
+sse-starlette>=2.0.0
