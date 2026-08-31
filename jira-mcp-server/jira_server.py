@@ -110,20 +110,34 @@ def _get_dynamic_mapping(headers: dict) -> dict:
 
 def _translate_fields(fields: dict, headers: dict = None, project_key: str = None) -> dict:
     """Translates user-friendly field names to Jira custom field IDs dynamically.
-    Also handles component/components and fix_version string-to-dict conversion."""
+    Also handles assignee, labels, component, and sprint string-to-object conversions."""
     mapping = _get_dynamic_mapping(headers)
     translated = {}
     for k, v in fields.items():
         key_lower = k.lower().replace(" ", "_")
         mapped_key = mapping.get(key_lower, k)
         
-        # Handle sprint "active" resolution
-        if key_lower == "sprint" and str(v).lower() == "active" and headers and project_key:
-            active_sprint_id = _get_active_sprint_id(project_key, headers)
-            if active_sprint_id:
-                translated[mapped_key] = active_sprint_id
+        # Handle sprint resolution
+        if key_lower == "sprint" and headers and project_key:
+            sprint_id = _resolve_sprint_id(str(v), project_key, headers)
+            if sprint_id:
+                translated[mapped_key] = sprint_id
             else:
                 translated[mapped_key] = v
+        # Handle assignee: convert string to {"name": "..."} format
+        elif key_lower == "assignee":
+            if isinstance(v, str):
+                translated["assignee"] = {"name": v.strip()}
+            else:
+                translated["assignee"] = v
+        # Handle labels: convert string to list
+        elif key_lower == "labels":
+            if isinstance(v, str):
+                translated["labels"] = [l.strip() for l in v.split(",") if l.strip()]
+            elif isinstance(v, list):
+                translated["labels"] = [str(l).strip() for l in v if str(l).strip()]
+            else:
+                translated["labels"] = v
         # Handle component/components: convert string name to [{"name": "..."}] format
         elif key_lower in ("component", "components"):
             if isinstance(v, str):
@@ -305,12 +319,17 @@ def create_jira_issue(
     project_key: str, 
     summary: str, 
     description: str = "", 
-    issue_type: str = "Task", 
+    issue_type: str = "Story", 
+    assignee: str = "",
+    sprint: str = "",
+    labels: list = None,
+    story_points: float = None,
     custom_fields: dict = None,
     ctx: Context = None
 ) -> str:
     """
-    Create a new issue in Jira Data Center with optional custom fields support.
+    Create a new issue in Jira Data Center.
+    Use explicit parameters for assignee, sprint, labels, and story_points for reliability.
     """
     try:
         headers = get_jira_headers(ctx)
@@ -318,14 +337,24 @@ def create_jira_issue(
         
         # Default initialization for Sprint and Component
         base_custom_fields = {
-            "sprint": "active",
             "component": "2026_HS_GPOS_PLATFORM"
         }
         
-        # Only add AX fields for 'story' to prevent Epic/Task/Initiative screen errors
-        if issue_type.lower() == "story":
-            base_custom_fields["ax_phase"] = "0"
-            base_custom_fields["ax_save"] = "0"
+        # Map explicit arguments into the base custom fields
+        if sprint:
+            base_custom_fields["sprint"] = sprint
+        else:
+            base_custom_fields["sprint"] = "active"
+            
+        if assignee:
+            base_custom_fields["assignee"] = assignee
+            
+        if labels:
+            base_custom_fields["labels"] = labels
+            
+        if story_points is not None:
+            base_custom_fields["customfield_10002"] = story_points
+
         if custom_fields:
             base_custom_fields.update(custom_fields)
 
@@ -337,6 +366,11 @@ def create_jira_issue(
             base_custom_fields.pop("customfield_47009", None)
 
         translated_fields = _translate_fields(base_custom_fields, headers, project_key)
+        
+        # ALWAYS enforce "0" for AX Phase and AX Save on creation for Stories
+        if issue_type.lower() == "story":
+            translated_fields["customfield_46609"] = {"value": "0"} if isinstance(translated_fields.get("customfield_46609"), dict) else "0"
+            translated_fields["customfield_47009"] = {"value": "0"} if isinstance(translated_fields.get("customfield_47009"), dict) else "0"
 
         payload = {
             "fields": {
@@ -350,6 +384,9 @@ def create_jira_issue(
         # Merge custom fields
         if translated_fields:
             payload["fields"].update(translated_fields)
+            
+        # Decouple assignee from creation to avoid "Field not on Screen" HTTP 400 errors
+        target_assignee = payload["fields"].pop("assignee", None)
 
         response = requests.post(url, headers=headers, json=payload, timeout=15)
 
@@ -358,7 +395,18 @@ def create_jira_issue(
 
         data = response.json()
         key = data.get("key")
-        return f"✅ **Successfully created Jira Issue [{key}]**!\nLink: {JIRA_BASE_URL}/browse/{key}"
+        
+        # Post-creation Assignment
+        assignee_status = ""
+        if target_assignee:
+            assign_url = f"{JIRA_BASE_URL}/rest/api/2/issue/{key}/assignee"
+            assign_res = requests.put(assign_url, headers=headers, json=target_assignee, timeout=15)
+            if assign_res.status_code not in (200, 204):
+                assignee_status = f"\n⚠️ Assignee failed: {assign_res.text[:100]}"
+            else:
+                assignee_status = f"\n👤 Assigned to: {target_assignee.get('name')}"
+
+        return f"✅ **Successfully created Jira Issue [{key}]**!{assignee_status}\nLink: {JIRA_BASE_URL}/browse/{key}"
     except Exception as e:
         return f"Error executing create_jira_issue: {str(e)}"
 
@@ -751,6 +799,41 @@ def _get_active_sprint_id(project_key: str, headers: dict) -> int:
         return None
 
     return sprints[0].get("id")
+    
+def _resolve_sprint_id(sprint_input: str, project_key: str, headers: dict) -> int:
+    """
+    Helper function to resolve a sprint ID. If sprint_input is 'active', returns the active sprint.
+    If it's a specific sprint name (e.g. '2026_GPOS1SP18(8/31-09/11)'), finds it and returns the ID.
+    """
+    sprint_input_str = str(sprint_input).strip()
+    if not sprint_input_str or sprint_input_str.lower() == "active":
+        return _get_active_sprint_id(project_key, headers)
+        
+    board_url = f"{JIRA_BASE_URL}/rest/agile/1.0/board?projectKeyOrId={project_key}"
+    try:
+        board_response = requests.get(board_url, headers=headers, timeout=15)
+        if board_response.status_code == 200:
+            boards = board_response.json().get("values", [])
+            if boards:
+                board_id = boards[0].get("id")
+                # Add state=active,future to avoid hitting maxResults=50 limit for old sprints
+                sprints_url = f"{JIRA_BASE_URL}/rest/agile/1.0/board/{board_id}/sprint?state=active,future"
+                sprints_response = requests.get(sprints_url, headers=headers, timeout=15)
+                if sprints_response.status_code == 200:
+                    sprints = sprints_response.json().get("values", [])
+                    # Try exact match
+                    for s in sprints:
+                        if s.get("name", "").strip().lower() == sprint_input_str.lower():
+                            return s.get("id")
+                    # Try substring match
+                    for s in sprints:
+                        if sprint_input_str.lower() in s.get("name", "").lower():
+                            return s.get("id")
+    except Exception:
+        pass
+    
+    # If all resolution fails, fallback to active sprint to prevent HTTP 400 crashes on creation
+    return _get_active_sprint_id(project_key, headers)
 
 
 @mcp.tool()
@@ -1424,6 +1507,16 @@ def bulk_create_jira_issues(
             description = issue_data.get("description", "")
             issue_type = issue_data.get("issue_type", "Story")
             custom_fields = issue_data.get("custom_fields", {})
+            
+            # Extract common explicit fields if the LLM put them at the root level instead of in custom_fields
+            if "assignee" in issue_data:
+                custom_fields["assignee"] = issue_data["assignee"]
+            if "sprint" in issue_data:
+                custom_fields["sprint"] = issue_data["sprint"]
+            if "labels" in issue_data:
+                custom_fields["labels"] = issue_data["labels"]
+            if "story_points" in issue_data:
+                custom_fields["customfield_10002"] = issue_data["story_points"]
 
             payload = {
                 "fields": {
@@ -1439,6 +1532,14 @@ def bulk_create_jira_issues(
                 translated_custom = _translate_fields(custom_fields, headers, proj)
                 payload["fields"].update(translated_custom)
 
+            # ALWAYS enforce "0" for AX Phase and AX Save on creation for Stories
+            if issue_type.lower() == "story":
+                payload["fields"]["customfield_46609"] = {"value": "0"} if isinstance(payload["fields"].get("customfield_46609"), dict) else "0"
+                payload["fields"]["customfield_47009"] = {"value": "0"} if isinstance(payload["fields"].get("customfield_47009"), dict) else "0"
+
+            # Decouple assignee from creation to avoid "Field not on Screen" HTTP 400 errors
+            target_assignee = payload["fields"].pop("assignee", None)
+
             # Create the issue
             create_url = f"{JIRA_BASE_URL}/rest/api/2/issue"
             response = requests.post(create_url, headers=headers, json=payload, timeout=15)
@@ -1446,20 +1547,23 @@ def bulk_create_jira_issues(
             if response.status_code in (200, 201):
                 new_key = response.json().get("key")
                 created_keys.append(new_key)
+                
+                # Post-creation Assignment
+                if target_assignee:
+                    assign_url = f"{JIRA_BASE_URL}/rest/api/2/issue/{new_key}/assignee"
+                    requests.put(assign_url, headers=headers, json=target_assignee, timeout=15)
             else:
                 failed.append(f"#{i+1} '{summary}' (HTTP {response.status_code}): {response.text[:100]}")
 
-        # Move created issues to active sprint
-        if active_sprint_id and created_keys:
+        # Only move issues to active sprint if they weren't given a specific sprint in custom fields
+        sprint_status = "Assigned via custom fields"
+        if active_sprint_id and created_keys and assign_to_active_sprint:
             move_url = f"{JIRA_BASE_URL}/rest/agile/1.0/sprint/{active_sprint_id}/issue"
             move_payload = {"issues": created_keys}
             move_response = requests.post(move_url, headers=headers, json=move_payload, timeout=15)
-
-            sprint_status = "✅ Assigned to active sprint" if move_response.status_code in (200, 204) else f"⚠️ Sprint assignment failed (HTTP {move_response.status_code})"
-        elif not active_sprint_id:
+            sprint_status = "✅ Assigned to active sprint (fallback)" if move_response.status_code in (200, 204) else f"⚠️ Sprint fallback assignment failed (HTTP {move_response.status_code})"
+        elif not active_sprint_id and assign_to_active_sprint:
             sprint_status = "📋 Created in backlog (no active sprint found)"
-        else:
-            sprint_status = "No issues to assign"
 
         # Build result
         output = f"🚀 **Bulk Create Results** for project `{proj}`:\n\n"

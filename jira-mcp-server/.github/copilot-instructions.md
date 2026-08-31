@@ -164,7 +164,7 @@ You MUST NOT execute the tool until the user replies with `1` (or equivalent pos
 ## 🛠️ Custom Fields Initialization & Aliases
 
 When creating new Jira issues via `create_jira_issue`:
-1. **`AX_phase` and `AX_Save`** are automatically set to `"0"` by default. They will remain `"0"` unless explicitly asked to update.
+1. **`AX_phase` and `AX_Save`** are automatically set to `"0"` by default on backend. **CRITICAL: When creating a NEW Story, you MUST NOT override these with AX_IMPL or any other value. Always let them default to "0".**
 2. The issue will be automatically assigned to the active sprint unless specified otherwise.
 3. The default **Component** is `2026_HS_GPOS_PLATFORM` unless a specific component is matched by the Component Auto-Assignment Rules above.
 4. You can use user-friendly field aliases instead of internal IDs (e.g., `sprint`, `epic_link`, `ax_phase`, `ax_save`, `story_points`, `component`) in the `custom_fields` or `fields` dictionaries for both `create_jira_issue` and `update_jira_issue`.
@@ -185,7 +185,7 @@ When creating new Jira issues via `create_jira_issue`:
 1. **Default Project Key**: Always default to **`SIGPOSDEV`** if the user doesn't specify a project key. Never ask the user which project key to search in or guess iteratively; use `SIGPOSDEV` automatically.
 2. **Table Output Format**: Whenever listing issues, searching sprint tickets, or summarizing stories, ALWAYS present them as a clean, structured **Markdown Table** with the following columns:
    `| Key | Summary | Status | Assignee | Priority | Link |`
-3. **Active Sprint Enforcement**: Always search and create new stories in the currently active sprint (`project = SIGPOSDEV AND sprint in openSprints()`).
+3. **Sprint Enforcement**: If the user provides a specific sprint name (e.g., `2026_GPOS1SP18(8/31-09/11)`), pass that EXACT string to the `sprint` custom field. ONLY fallback to `"active"` if the user does NOT specify a sprint.
 4. **Multi-Labeling**: Apply both the phase label (e.g., `AX_IMPL`) and context label (e.g., `development`, `training`) when both apply.
 5. **Context-Aware Comment Replies**: When asked to reply to a ticket comment, read the full chronological comment thread + Title + Description + DOD to synthesize a polite, contextually accurate response.
 
@@ -195,16 +195,16 @@ When creating new Jira issues via `create_jira_issue`:
 
 When the user requests creating a Jira issue and provides multiple fields, you MUST process **ALL** of the following fields if mentioned by the user. Do NOT skip or drop any field:
 
-| User Field | Tool Parameter / Custom Field |
+| User Field | Tool Parameter |
 | :--- | :--- |
 | Summary | `summary` |
 | Description | `description` (see Description Generation Rule below) |
-| Assignee | `custom_fields: {"assignee": {"name": "username"}}` |
-| Story Points | `custom_fields: {"story_points": <number>}` |
+| Assignee | `assignee: "username"` |
+| Story Points | `story_points: <number>` |
 | Original Story Points | `custom_fields: {"original_story_points": <number>}` |
-| Labels | `custom_fields: {"labels": ["label1", "label2"]}` |
+| Labels | `labels: ["label1", "label2"]` (If user says "add respective labels", evaluate context and generate relevant labels e.g. `["AX_REQ", "development"]`. Do NOT drop the field.) |
 | Priority | `custom_fields: {"priority": {"name": "P2"}}` |
-| Sprint | `custom_fields: {"sprint": "active"}` |
+| Sprint | `sprint: "2026_GPOS1SP18(8/31-09/11)"` (Use user's string if provided, else `"active"`) |
 | Component | `custom_fields: {"component": "ComponentName"}` |
 | Epic Link | `custom_fields: {"epic_link": "SIGPOSDEV-XXXX"}` |
 | Fix Version/s | `custom_fields: {"fix_version": "v1.0"}` or `{"fix_versions": ["v1.0", "v2.0"]}` |
