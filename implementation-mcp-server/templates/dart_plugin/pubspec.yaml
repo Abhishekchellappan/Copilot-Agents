@@ -1,0 +1,12 @@
+name: {COMPONENT_NAME}
+description: "{DESCRIPTION}"
+version: 1.0.0
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  # Add project-specific dependencies here
+
+dev_dependencies:
+  test: ^1.24.0
